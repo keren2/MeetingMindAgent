@@ -95,6 +95,18 @@ def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS kb_vectors (
+                chunk_id INTEGER PRIMARY KEY,
+                file_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                embedding TEXT NOT NULL,
+                metadata TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(chunk_id) REFERENCES kb_chunks(id) ON DELETE CASCADE,
+                FOREIGN KEY(file_id) REFERENCES kb_files(id) ON DELETE CASCADE,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS reports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,

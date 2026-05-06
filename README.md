@@ -1,6 +1,6 @@
 # MeetingMind Agent Pro
 
-MeetingMind Agent Pro 是一个可本地运行的 AI 需求会议助手 / AI 产品经理助手 Demo。项目包含用户系统、每日调用限额、聊天会话、私人知识库 RAG、多 Agent 报告生成、Markdown/PDF 导出、需求讨论群聊，以及带 UI 的管理后台。
+MeetingMind Agent Pro 是一个可本地运行的 AI 需求会议助手 / AI 产品经理助手 Demo。项目包含用户系统、每日调用限额、聊天会话、后端私人知识库 RAG、多 Agent 报告生成、Markdown/PDF 导出、需求讨论群聊、聊天记录导入分析，以及带 UI 的管理后台。
 
 ## 运行效果图
 
@@ -22,7 +22,7 @@ MeetingMind Agent Pro 是一个可本地运行的 AI 需求会议助手 / AI 产
 .
 ├── backend/                     FastAPI 后端
 │   ├── app/                     后端业务代码
-│   ├── data/                    运行后自动生成，保存 SQLite、上传文件、报告
+│   ├── data/                    运行后自动生成，保存 SQLite、上传文件、报告和向量索引数据
 │   ├── requirements.txt         Python 依赖
 │   └── run.ps1                  后端单独启动脚本
 ├── frontend/                    React + TypeScript 前端
@@ -49,13 +49,13 @@ MeetingMind Agent Pro 是一个可本地运行的 AI 需求会议助手 / AI 产
 - 普通用户每日默认 3 次 AI 调用，可在后台调整
 - 会话列表、聊天记录存储、多轮上下文
 - 文件上传知识库，支持 `.pdf`、`.md`、`.txt`、`.docx`
-- RAG 检索：上传文件解析为 chunk，并按用户隔离检索
-- 多 Agent 工作流：Supervisor、Analyzer、RAG Agent、Requirement、Planner、Writer、Critic
+- RAG 检索：后端上传 API 会把文件解析为 chunk，生成 embedding，并按用户隔离做向量检索
+- 多 Agent 工作流：Supervisor、Memory、Analyzer、RAG Agent、Requirement、Planner、Writer、Critic
 - 报告生成：输出项目需求分析报告 Markdown，并支持 PDF 下载
 - 管理后台：Dashboard、用户管理、使用日志、系统配置
 - 需求讨论：可定义多个角色 Agent，配置人物背景、头像和表达风格
 - 群聊讨论：把多个角色加入同一个讨论群，指定事件后自动从不同视角完善方案
-- 流式讨论：点击“发起讨论”后，中间聊天区会逐字显示每个 Agent 的发言，讨论轮次后端限制最多 5 轮
+- 流式讨论：点击“发起讨论”后，中间聊天区会逐字显示每个 Agent 的发言；接口支持 1 到 5 轮，当前前端默认发起 1 轮
 - 本地 Skill 匹配：角色背景包含乔布斯、马斯克、特朗普等关键词时，优先使用 `skills/` 目录中的对应 skill 生成语气
 - 真实头像：默认 Agent 使用乔布斯、马斯克、特朗普照片，老板使用以色列总理内塔尼亚胡照片
 - 群聊记录：支持查看、清除，以及导出到指定目录
@@ -69,17 +69,18 @@ MeetingMind Agent Pro 是一个可本地运行的 AI 需求会议助手 / AI 产
 
 - FastAPI
 - SQLite
-- LangGraph，可安装时启用，失败时使用同等顺序的本地工作流降级
+- LangChain Core：封装 OpenAI-compatible ChatModel、Embeddings、Retriever、Runnable Chain
+- LangGraph：编排 Supervisor、Memory、Analyzer、RAG、Planner、Writer、Critic 等 Agent 节点
+- SQLite 向量表：保存知识库 chunk embeddings，支持本地向量检索
 - pypdf / python-docx 文档解析
 - reportlab PDF 生成，可失败降级为最小 PDF
-- httpx 调用 OpenAI-compatible 模型接口
+- httpx：仅作为自定义 LangChain ChatModel / Embeddings 内部 HTTP 客户端
 
 前端：
 
 - React
 - TypeScript
 - Vite
-- React Flow
 - React Markdown
 - lucide-react
 - 原生 CSS 响应式布局
@@ -138,6 +139,11 @@ http://127.0.0.1:5173
 LLM_API_KEY=your_api_key
 LLM_MODEL=deepseek-v4-flash
 LLM_BASE_URL=https://api.deepseek.com
+EMBEDDING_MODEL=
+EMBEDDING_API_KEY=
+EMBEDDING_BASE_URL=
+EMBEDDING_DIMENSIONS=384
+VECTOR_STORE=sqlite
 SECRET_KEY=change-me-for-production
 DEFAULT_DAILY_LIMIT=3
 ALLOW_DEMO_FALLBACK=true
@@ -148,6 +154,11 @@ ALLOW_DEMO_FALLBACK=true
 - `LLM_API_KEY`：大模型 API Key
 - `LLM_MODEL`：模型名称
 - `LLM_BASE_URL`：OpenAI-compatible 接口地址，不要带 `/v1`
+- `EMBEDDING_MODEL`：可选的 embedding 模型名称；留空时使用本地 Hashing Embeddings
+- `EMBEDDING_API_KEY`：可选的 embedding API Key，默认可复用 `LLM_API_KEY`
+- `EMBEDDING_BASE_URL`：可选的 embedding 接口地址，默认可复用 `LLM_BASE_URL`
+- `EMBEDDING_DIMENSIONS`：本地 Hashing Embeddings 的向量维度
+- `VECTOR_STORE`：向量库类型，当前实现为 `sqlite`
 - `SECRET_KEY`：JWT 签名密钥
 - `DEFAULT_DAILY_LIMIT`：新用户默认每日调用次数
 - `ALLOW_DEMO_FALLBACK`：模型调用失败时是否使用本地演示内容
@@ -156,12 +167,21 @@ ALLOW_DEMO_FALLBACK=true
 
 1. 打开 `http://127.0.0.1:5173`
 2. 使用 `admin / admin123` 登录，或注册普通用户
-3. 在左侧上传 `.pdf`、`.md`、`.txt`、`.docx` 知识库文件
-4. 在中间聊天区输入会议内容或需求背景
-5. 查看右侧 RAG 检索结果和 Agent 流程
-6. 点击“生成报告”
-7. 在右侧报告预览中下载 Markdown 或 PDF
+3. 默认进入“需求讨论”，选择角色 Agent，填写讨论事件并点击“发起讨论”
+4. 在中间聊天区查看老板任务说明和各角色 Agent 的逐字输出
+5. 可查看历史群聊、清除聊天记录，或把当前群聊导出为 Markdown
+6. 切换到“需求分析”，粘贴或导入 `.md`、`.txt`、`.json` 聊天记录
+7. 点击“快速总结”或“详细总结”，在右侧预览报告并下载 Markdown / PDF
 8. 切换到“后台”查看用户、调用日志、默认限额配置
+
+## 知识库与 RAG API 流程
+
+当前前端主界面聚焦角色讨论和聊天记录分析；知识库 RAG 能力通过后端 API 提供：
+
+1. 调用 `POST /api/upload` 上传 `.pdf`、`.md`、`.txt`、`.docx` 文件
+2. 后端解析文本并切分为 chunk
+3. LangChain Embeddings 生成向量，写入 SQLite `kb_vectors`
+4. 聊天和报告生成时通过 LangChain Retriever 检索用户自己的知识库片段
 
 ## 需求讨论流程
 
@@ -288,16 +308,19 @@ ALLOW_DEMO_FALLBACK=true
 ./backend/data/meetingmind.db
 ./backend/data/uploads
 ./backend/data/reports
+./backend/data/vectorstore
 ./exports
 ```
 
-这些文件属于本地运行数据，已加入 `.gitignore` 或作为本地导出目录使用。
+向量数据当前主要保存在 SQLite 的 `kb_vectors` 表中；`vectorstore` 目录作为本地向量库扩展目录保留。这些文件属于本地运行数据，已加入 `.gitignore` 或作为本地导出目录使用。
 
-## 面试展示亮点
+## AI 架构重构说明
 
-- 不是单纯聊天壳，而是包含登录、限额、知识库、后台、导出的完整 SaaS 雏形
-- 多 Agent 工作流有清晰可视化和执行 trace
-- 需求讨论让程序员、产品经理、销售等 Agent 从不同立场协作完善方案
-- RAG 数据按用户隔离，贴近真实商业系统
-- 模型服务失败时有本地 fallback，现场演示稳定
-- Windows 一键脚本可直接拉起完整前后端
+本项目后端 AI 层已重构为更贴近 Agent 工程岗位要求的技术栈：
+
+- 大模型调用：通过 `langchain_core` 自定义 `BaseChatModel`，封装 OpenAI-compatible `/v1/chat/completions` 接口。
+- Agent 编排：报告生成链路使用 LangGraph `StateGraph`，包含 Supervisor、Memory、Analyzer、RAG Agent、Requirement、Planner、Writer、Critic/Reflection 节点。
+- RAG：上传文档后使用 LangChain Document、Retriever 和 Runnable 链完成检索增强生成。
+- 向量库：新增 SQLite 本地向量表 `kb_vectors`，保存每个知识库 chunk 的 embedding，并通过余弦相似度召回。默认使用本地 Hashing Embeddings；如配置 `EMBEDDING_MODEL`，可切换到 OpenAI-compatible embeddings API。
+- Tool Use：新增 LangChain Tool 封装，包括知识库检索工具和角色 Skill 工具，供 Agent 工作流标准化调用。
+- 记忆与反思：多轮会话历史进入 Memory 节点，报告完成后由 Critic/Reflection 节点做质量检查。

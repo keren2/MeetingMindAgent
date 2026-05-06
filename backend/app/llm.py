@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import httpx
-
+from .ai_stack import chat_chain
 from .config import settings
 
 
@@ -9,20 +8,7 @@ async def call_llm(messages: list[dict], purpose: str) -> str:
     cfg = settings()
     if cfg["llm_api_key"]:
         try:
-            base = cfg["llm_base_url"].rstrip("/")
-            async with httpx.AsyncClient(timeout=45) as client:
-                res = await client.post(
-                    f"{base}/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {cfg['llm_api_key']}"},
-                    json={
-                        "model": cfg["llm_model"],
-                        "messages": messages,
-                        "temperature": 0.4,
-                    },
-                )
-                res.raise_for_status()
-                data = res.json()
-                return data["choices"][0]["message"]["content"]
+            return await chat_chain(messages).ainvoke({})
         except Exception:
             if not cfg["allow_demo_fallback"]:
                 raise

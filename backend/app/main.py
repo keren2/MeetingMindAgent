@@ -7,13 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .ai_stack import rag_answer_chain
 from .agents import run_workflow
 from .auth import admin_user, current_user
 from .config import settings
 from .db import connect, init_db, now_iso, row_to_dict
 from .group_chat import router as group_chat_router
 from .llm import call_llm
-from .rag import delete_file, list_files, save_upload, search_knowledge
+from .rag import delete_file, ensure_vector_index, format_documents, list_files, retriever_for_user, save_upload
 from .reports import save_report
 from .security import create_token, hash_password, verify_password
 from .usage import consume_usage, ensure_limit_row, usage_status
@@ -59,6 +60,7 @@ class ResetLimitIn(BaseModel):
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+    ensure_vector_index()
 
 
 @app.get("/api/health")
@@ -141,16 +143,30 @@ async def chat(payload: ChatIn, user: dict = Depends(current_user)):
         )
         rows = db.execute("SELECT role, content FROM messages WHERE session_id=? ORDER BY id ASC", (session_id,)).fetchall()
         history = [dict(r) for r in rows]
-    rag_docs = search_knowledge(user["id"], payload.message)
-    context = "\n".join(d["content"][:400] for d in rag_docs)
-    answer = await call_llm(
-        [
-            {"role": "system", "content": "你是 AI 需求会议助手，请帮助用户梳理需求、风险和下一步行动。"},
-            *history[-10:],
-            {"role": "user", "content": f"可参考知识库：\n{context}\n\n当前问题：{payload.message}"},
-        ],
-        "chat",
-    )
+    rag_documents = retriever_for_user(user["id"]).invoke(payload.message)
+    rag_docs = [
+        {
+            "id": int(doc.metadata.get("id", 0)),
+            "filename": str(doc.metadata.get("filename", "")),
+            "content": doc.page_content,
+            "score": float(doc.metadata.get("score", 0.0)),
+        }
+        for doc in rag_documents
+    ]
+    question = "\n".join(item["content"] for item in history[-6:])
+    try:
+        answer = await rag_answer_chain(
+            "你是 AI 需求会议助手，请结合检索上下文和多轮记忆，帮助用户梳理需求、风险、待确认问题和下一步行动。"
+        ).ainvoke({"context": format_documents(rag_documents), "question": question})
+    except Exception:
+        answer = await call_llm(
+            [
+                {"role": "system", "content": "你是 AI 需求会议助手，请帮助用户梳理需求、风险和下一步行动。"},
+                *history[-10:],
+                {"role": "user", "content": f"可参考知识库：\n{format_documents(rag_documents)}\n\n当前问题：{payload.message}"},
+            ],
+            "chat",
+        )
     with connect() as db:
         db.execute(
             "INSERT INTO messages(session_id, role, content, created_at) VALUES(?, 'assistant', ?, ?)",
